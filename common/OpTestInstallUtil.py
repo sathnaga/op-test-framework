@@ -11,6 +11,7 @@ KS = ""
 DISK = ""
 USERNAME = ""
 PASSWORD = ""
+SERVER = ""
 
 class InstallUtil():
     def __init__(self, base_path="", initrd="initrd.img", vmlinux="vmlinuz",
@@ -84,16 +85,18 @@ class ThreadedHTTPServer(SocketServer.ThreadingMixIn, BaseHTTPServer.HTTPServer)
 
 def start_server():
     HOST, PORT = "0.0.0.0", 0
-    server = ThreadedHTTPServer((HOST, PORT), ThreadedHTTPHandler)
-    ip, port = server.server_address
+    global SERVER
+    SERVER = ThreadedHTTPServer((HOST, PORT), ThreadedHTTPHandler)
+    ip, port = SERVER.server_address
     print "# Listening on %s:%s" % (ip,port)
-    server_thread = threading.Thread(target=server.serve_forever)
+    server_thread = threading.Thread(target=SERVER.serve_forever)
     server_thread.daemon = True
     server_thread.start()
     print "# Server running in thread:",server_thread.name
     return port
 
 def stop_server():
-    server.shutdown()
-    server.server_close()
+    global SERVER
+    SERVER.shutdown()
+    SERVER.server_close()
     return
