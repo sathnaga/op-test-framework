@@ -23,9 +23,6 @@ import unittest
 import time
 import pexpect
 import socket
-import threading
-import SocketServer
-import BaseHTTPServer
 import subprocess
 
 import OpTestConfiguration
@@ -33,6 +30,7 @@ from common.OpTestUtil import OpTestUtil
 from common.OpTestSystem import OpSystemState
 from common.OpTestError import OpTestError
 from common.Exceptions import CommandFailed
+from common import OpTestInstallUtil
 
 class MyIPfromHost(unittest.TestCase):
     def setUp(self):
@@ -52,97 +50,65 @@ class MyIPfromHost(unittest.TestCase):
 
 class InstallHostOS(unittest.TestCase):
     def setUp(self):
-        conf = OpTestConfiguration.conf
-        self.host = conf.host()
-        self.ipmi = conf.ipmi()
-        self.system = conf.system()
-        self.bmc = conf.bmc()
+        self.conf = OpTestConfiguration.conf
+        self.host = self.conf.host()
+        self.ipmi = self.conf.ipmi()
+        self.system = self.conf.system()
+        self.bmc = self.conf.bmc()
         self.util = OpTestUtil()
-        self.bmc_type = conf.args.bmc_type
-
-    def select_petitboot_item(self, item):
-        self.system.goto_state(OpSystemState.PETITBOOT)
-        rawc = self.c.get_console()
-        r = None
-        while r != 0:
-            time.sleep(0.2)
-            r = rawc.expect(['\*.*\s+' + item, '\*.*\s+', pexpect.TIMEOUT],
-                              timeout=1)
-            if r == 0:
-                break
-            rawc.send("\x1b[A")
-            rawc.expect('')
-            rawc.sendcontrol('l')
+        self.bmc_type = self.conf.args.bmc_type
 
     def runTest(self):
         self.system.goto_state(OpSystemState.PETITBOOT_SHELL)
         time.sleep(100)
         self.c = self.system.sys_get_ipmi_console()
         self.system.host_console_unique_prompt()
-
-        retry = 30
-        while retry > 0:
-            try:
-                self.c.run_command("ifconfig -a")
-                break
-            except CommandFailed as cf:
-                if cf.exitcode is 1:
-                    time.sleep(1)
-                    retry = retry - 1
-                    pass
-                else:
-                    raise cf
-
-        retry = 30
-        while retry > 0:
-            try:
-                my_ip = "9.40.192.92"
-                #my_ip = self.system.get_my_ip_from_host_perspective()
-                self.c.run_command("ping %s -c 1" % my_ip)
-                break
-            except CommandFailed as cf:
-                if cf.exitcode is 1:
-                    time.sleep(1)
-                    retry = retry - 1
-                    pass
-                else:
-                    raise cf
-
-        scratch_disk_size = self.host.get_scratch_disk_size(self.c)
-
-        # start our web server
-        HOST, PORT = "0.0.0.0", 0
-        server = ThreadedHTTPServer((HOST, PORT), ThreadedHTTPHandler)
-        ip, port = server.server_address
-        print "# Listening on %s:%s" % (ip,port)
-        server_thread = threading.Thread(target=server.serve_forever)
-        server_thread.daemon = True
-        server_thread.start()
-        print "# Server running in thread:",server_thread.name
-
-        my_ip = "9.40.192.92"
+        self.c.run_command("ifconfig -a")
         #my_ip = self.system.get_my_ip_from_host_perspective()
+        my_ip = "9.40.192.92"
+        self.c.run_command("ping %s -c 1" % str(my_ip))
+
+        base_path = "osimages/hostos"
+        vmlinux = "vmlinuz"
+        initrd = "initrd.img"
+        ks = "hostos.ks"
+
+        OpTestInstallUtil.InstallUtil(base_path, vmlinux, initrd, ks,
+                                      self.host.get_scratch_disk())
+        # start our web server
+        port = OpTestInstallUtil.start_server()
 
         if not "qemu" in self.bmc_type:
-            # we need to go and grab things from the network to netboot
-            arp = subprocess.check_output(['arp', self.host.hostname()]).split('\n')[1]
-            arp = arp.split()
-            host_mac_addr = arp[2]
-            print "# Found host mac addr %s", host_mac_addr
-            ks_url = 'http://%s:%s/hostos.ks' % (my_ip, port)
-            kernel_args = "ifname=net0:%s ip=%s::9.40.192.1:255.255.255.0:%s:net0:none nameserver=9.0.9.1 inst.ks=%s" % (host_mac_addr,
-                                                                                                                         self.host.ip,
-                                                                                                                         self.host.hostname(),
-                                                                                                                         ks_url)
+            if not self.conf.args.host_mac:
+                # we need to go and grab things from the network to netboot
+                arp = subprocess.check_output(['arp', self.host.hostname()]).split('\n')[1]
+                arp = arp.split()
+                host_mac_addr = arp[2]
+                print "# Found host mac addr %s", host_mac_addr
+            else:
+                host_mac_addr = self.conf.args.host_mac
+            ks_url = 'http://%s:%s/%s' % (my_ip, port, ks)
+            kernel_args = "ifname=net0:%s ip=%s::%s:%s:%s:net0:none nameserver=%s inst.ks=%s" % (host_mac_addr,
+                                                                                                      self.host.ip,
+                                                                                                      self.conf.args.host_gateway,
+                                                                                                      self.conf.args.host_submask,
+                                                                                                      self.host.hostname(),
+                                                                                                      self.conf.args.host_dns,
+                                                                                                      ks_url)
             self.system.goto_state(OpSystemState.PETITBOOT_SHELL)
-            self.c.run_command("[ -f vmlinuz ]&& rm -f vmlinuz;[ -f initrd.img ] && rm -f initrd.img;echo 'true'")
-            self.c.run_command("wget http://%s:%s/hostos/vmlinuz" % (my_ip, port))
-            self.c.run_command("wget http://%s:%s/hostos/initrd.img" % (my_ip, port))
-            self.c.run_command("kexec -i initrd.img -c \"%s\" vmlinuz -l" % kernel_args)
+            cmd = "[ -f %s ]&& rm -f %s;[ -f %s ] && rm -f %s;true" % (vmlinux,
+                                                                       vmlinux,
+                                                                       initrd,
+                                                                       initrd)
+            self.c.run_command(cmd)
+            self.c.run_command("wget http://%s:%s/%s" % (my_ip, port, vmlinux))
+            self.c.run_command("wget http://%s:%s/%s" % (my_ip, port, initrd))
+            self.c.run_command("kexec -i %s -c \"%s\" %s -l" % (initrd,
+                                                                kernel_args,
+                                                                vmlinux))
             self.c.get_console().send("kexec -e\n")
         else:
             pass
-
         # Do things
         rawc = self.c.get_console()
         rawc.expect('opal: OPAL detected',timeout=60)
@@ -157,46 +123,4 @@ class InstallHostOS(unittest.TestCase):
         rawc.expect('reboot: Restarting system', timeout=300)
         self.system.set_state(OpSystemState.IPLing)
         self.system.goto_state(OpSystemState.PETITBOOT_SHELL)
-        #server.shutdown()
-        server.server_close()
-
-class ThreadedHTTPHandler(BaseHTTPServer.BaseHTTPRequestHandler):
-    def do_HEAD(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/plain")
-        self.end_headers()
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/plain")
-        self.end_headers()
-        conf = OpTestConfiguration.conf
-        host = conf.host()
-        print "# Webserver was asked for: ", self.path
-        if self.path == "/hostos/vmlinuz":
-            f = open("osimages/hostos/vmlinuz", "r")
-            d = f.read()
-            self.wfile.write(d)
-            f.close()
-            return
-        elif self.path == "/hostos/initrd.img":
-            f = open("osimages/hostos/initrd.img", "r")
-            d = f.read()
-            self.wfile.write(d)
-            f.close()
-            return
-        elif self.path == "/hostos.ks":
-            host_username = host.username()
-            host_password = host.password()
-            f = open("osimages/hostos/hostos.ks", "r")
-            d = f.read()
-            ps = d.format(host_password, host.get_scratch_disk(),
-                          host.get_scratch_disk(),
-                          host.get_scratch_disk())
-            self.wfile.write(ps)
-            return
-        else:
-            self.send_response(404)
-            return
-
-class ThreadedHTTPServer(SocketServer.ThreadingMixIn, BaseHTTPServer.HTTPServer):
-    pass
+        OpTestInstallUtil.stop_server()
