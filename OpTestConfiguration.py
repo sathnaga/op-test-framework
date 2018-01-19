@@ -134,8 +134,6 @@ class OpTestConfiguration():
         osgroup = parser.add_argument_group('OS Images', 'OS Images to boot/install')
         osgroup.add_argument("--os-cdrom", help="OS CD/DVD install image", default="")
         osgroup.add_argument("--os-repo", help="Os repo", default="")
-        osgroup.add_argument("--os-vmlinux", help="vmlinux image", default="")
-        osgroup.add_argument("--os-initrd", help="Initrd image", default="")
 
         imagegroup = parser.add_argument_group('Images', 'Firmware LIDs/images to flash')
         imagegroup.add_argument("--bmc-image", help="BMC image to flash(*.tar in OpenBMC, *.bin in SMC)")
