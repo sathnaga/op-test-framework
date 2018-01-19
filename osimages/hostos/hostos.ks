@@ -1,7 +1,7 @@
 #HostOS Preseed for op-test
 %pre
 %end
-url --url=http://pokgsa.ibm.com/projects/h/host-os/devel/latest/iso/os/
+url --url={}
 text
 keyboard --vckeymap=us --xlayouts='us'
 services --enabled=NetworkManager,sshd

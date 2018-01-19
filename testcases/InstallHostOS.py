@@ -21,8 +21,8 @@
 
 import unittest
 import time
-import pexpect
-import socket
+#import pexpect
+#import socket
 import subprocess
 
 import OpTestConfiguration
@@ -32,6 +32,7 @@ from common.OpTestError import OpTestError
 from common.Exceptions import CommandFailed
 from common import OpTestInstallUtil
 
+
 class MyIPfromHost(unittest.TestCase):
     def setUp(self):
         conf = OpTestConfiguration.conf
@@ -40,6 +41,7 @@ class MyIPfromHost(unittest.TestCase):
         self.system = conf.system()
         self.bmc = conf.bmc()
         self.util = OpTestUtil()
+
     def runTest(self):
         self.system.goto_state(OpSystemState.PETITBOOT_SHELL)
         self.c = self.system.sys_get_ipmi_console()
@@ -47,6 +49,7 @@ class MyIPfromHost(unittest.TestCase):
         #my_ip = self.system.get_my_ip_from_host_perspective()
         my_ip = "9.40.192.92"
         print "# FOUND MY IP: %s" % my_ip
+
 
 class InstallHostOS(unittest.TestCase):
     def setUp(self):
@@ -60,25 +63,59 @@ class InstallHostOS(unittest.TestCase):
 
     def runTest(self):
         self.system.goto_state(OpSystemState.PETITBOOT_SHELL)
-        time.sleep(100)
         self.c = self.system.sys_get_ipmi_console()
         self.system.host_console_unique_prompt()
-        self.c.run_command("ifconfig -a")
-        #my_ip = self.system.get_my_ip_from_host_perspective()
         my_ip = "9.40.192.92"
-        self.c.run_command("ping %s -c 1" % str(my_ip))
-
+        retry = 30
+        while retry > 0:
+            try:
+                self.c.run_command("ifconfig -a")
+                break
+            except CommandFailed as cf:
+                if cf.exitcode is 1:
+                    time.sleep(1)
+                    retry = retry - 1
+                    pass
+                else:
+                    raise cf
+        retry = 30
+        while retry > 0:
+            try:
+                #my_ip = self.system.get_my_ip_from_host_perspective()
+                self.c.run_command("ping %s -c 1" % my_ip)
+                break
+            except CommandFailed as cf:
+                if cf.exitcode is 1:
+                    time.sleep(1)
+                    retry = retry - 1
+                    pass
+                else:
+                    raise cf
         base_path = "osimages/hostos"
+        boot_path = "ppc/ppc64"
         vmlinux = "vmlinuz"
         initrd = "initrd.img"
         ks = "hostos.ks"
 
-        OpTestInstallUtil.InstallUtil(base_path, vmlinux, initrd, ks,
-                                      self.host.get_scratch_disk())
+        OpTestInstallUtil.InstallUtil(base_path=base_path,
+                                      vmlinux=vmlinux,
+                                      initrd=initrd, ks=ks,
+                                      disk=self.host.get_scratch_disk(),
+                                      boot_path=boot_path,
+                                      my_ip=my_ip,
+                                      repo=self.conf.args.os_repo)
+
+        if self.conf.args.os_cdrom and not self.conf.args.os_repo:
+            repo = OpTestInstallUtil.setup_repo(self.conf.args.os_cdrom)
+        if self.conf.args.os_repo:
+            repo = self.conf.args.os_repo
+
+        OpTestInstallUtil.extract_install_files(repo)
+
         # start our web server
         port = OpTestInstallUtil.start_server()
 
-        if not "qemu" in self.bmc_type:
+        if "qemu" not in self.bmc_type:
             if not self.conf.args.host_mac:
                 # we need to go and grab things from the network to netboot
                 arp = subprocess.check_output(['arp', self.host.hostname()]).split('\n')[1]
@@ -89,12 +126,12 @@ class InstallHostOS(unittest.TestCase):
                 host_mac_addr = self.conf.args.host_mac
             ks_url = 'http://%s:%s/%s' % (my_ip, port, ks)
             kernel_args = "ifname=net0:%s ip=%s::%s:%s:%s:net0:none nameserver=%s inst.ks=%s" % (host_mac_addr,
-                                                                                                      self.host.ip,
-                                                                                                      self.conf.args.host_gateway,
-                                                                                                      self.conf.args.host_submask,
-                                                                                                      self.host.hostname(),
-                                                                                                      self.conf.args.host_dns,
-                                                                                                      ks_url)
+                                                                                                 self.host.ip,
+                                                                                                 self.conf.args.host_gateway,
+                                                                                                 self.conf.args.host_submask,
+                                                                                                 self.host.hostname(),
+                                                                                                 self.conf.args.host_dns,
+                                                                                                 ks_url)
             self.system.goto_state(OpSystemState.PETITBOOT_SHELL)
             cmd = "[ -f %s ]&& rm -f %s;[ -f %s ] && rm -f %s;true" % (vmlinux,
                                                                        vmlinux,
@@ -111,7 +148,7 @@ class InstallHostOS(unittest.TestCase):
             pass
         # Do things
         rawc = self.c.get_console()
-        rawc.expect('opal: OPAL detected',timeout=60)
+        rawc.expect('opal: OPAL detected', timeout=60)
         r = None
         while r != 0:
             r = rawc.expect(['Running post-installation scripts',
