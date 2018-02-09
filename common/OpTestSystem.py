@@ -1295,6 +1295,7 @@ class OpTestSystem(object):
             rawc.expect('\n')
         except Exception:  # Looks like older nc does not support -v, lets fallback
             my_ip = commands.getoutput("hostname -i")
+            rawc.sendcontrol('c')  # to avoid incase nc command hangs around
         return my_ip
 
 class OpTestFSPSystem(OpTestSystem):

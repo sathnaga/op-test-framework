@@ -20,13 +20,11 @@
 
 
 import unittest
-import time
 import subprocess
 
 import OpTestConfiguration
 from common.OpTestUtil import OpTestUtil
 from common.OpTestSystem import OpSystemState
-from common.Exceptions import CommandFailed
 from common import OpTestInstallUtil
 
 
@@ -48,52 +46,34 @@ class InstallRhel(unittest.TestCase):
 
     def runTest(self):
         self.system.goto_state(OpSystemState.PETITBOOT_SHELL)
-        self.c = self.system.sys_get_ipmi_console()
-        self.system.host_console_unique_prompt()
 
-        # Set the install paths
+        # Local path to keep install files
         base_path = "osimages/rhel"
+        # relative path from repo where vmlinux and initrd is present
         boot_path = "ppc/ppc64"
         vmlinux = "vmlinuz"
         initrd = "initrd.img"
         ks = "rhel.ks"
-
-
-        retry = 30
-        while retry > 0:
-            try:
-                self.c.run_command("ifconfig -a")
-                break
-            except CommandFailed as cf:
-                if cf.exitcode is 1:
-                    time.sleep(1)
-                    retry = retry - 1
-                    pass
-                else:
-                    raise cf
-        my_ip = self.system.get_my_ip_from_host_perspective()
+        OpIU = OpTestInstallUtil.InstallUtil(base_path=base_path,
+                                             vmlinux=vmlinux,
+                                             initrd=initrd,
+                                             ks=ks,
+                                             boot_path=boot_path)
+        my_ip = OpIU.get_server_ip()
         if not my_ip:
-            self.fail("unable to get the ip from host")
-        self.system.host_console_unique_prompt()
-        self.c.run_command("ping %s -c 1" % my_ip)
-
-        OpTestInstallUtil.InstallUtil(base_path=base_path,
-                                      vmlinux=vmlinux,
-                                      initrd=initrd, ks=ks,
-                                      disk=self.host.get_scratch_disk(),
-                                      boot_path=boot_path,
-                                      my_ip=my_ip,
-                                      repo=self.conf.args.os_repo)
+            self.fail("Unable to get the ip from host")
 
         if self.conf.args.os_cdrom and not self.conf.args.os_repo:
-            repo = OpTestInstallUtil.setup_repo(self.conf.args.os_cdrom)
+            repo = OpIU.setup_repo(self.conf.args.os_cdrom)
         if self.conf.args.os_repo:
             repo = self.conf.args.os_repo
-
-        OpTestInstallUtil.extract_install_files(repo)
+        if not repo:
+            self.fail("No valid repo to start installation")
+        if not OpIU.extract_install_files(repo):
+            self.fail("Unable to download install files")
 
         # start our web server
-        port = OpTestInstallUtil.start_server()
+        port = OpIU.start_server(my_ip)
 
         if "qemu" not in self.bmc_type:
             if not self.conf.args.host_mac:
@@ -112,7 +92,8 @@ class InstallRhel(unittest.TestCase):
                                                                                                  self.host.hostname(),
                                                                                                  self.conf.args.host_dns,
                                                                                                  ks_url)
-            self.system.goto_state(OpSystemState.PETITBOOT_SHELL)
+            self.c = self.system.sys_get_ipmi_console()
+            self.system.host_console_unique_prompt()
             cmd = "[ -f %s ]&& rm -f %s;[ -f %s ] && rm -f %s;true" % (vmlinux,
                                                                        vmlinux,
                                                                        initrd,
@@ -123,11 +104,11 @@ class InstallRhel(unittest.TestCase):
             self.c.run_command("kexec -i %s -c \"%s\" %s -l" % (initrd,
                                                                 kernel_args,
                                                                 vmlinux))
-            self.c.get_console().send("kexec -e\n")
+            rawc = self.c.get_console()
+            rawc.sendline("kexec -e")
         else:
             pass
         # Do things
-        rawc = self.c.get_console()
         rawc.expect('Sent SIGKILL to all processes', timeout=60)
         r = None
         while r != 0:
@@ -136,18 +117,21 @@ class InstallRhel(unittest.TestCase):
                              'Setting up the installation environment',
                              'Starting package installation process',
                              'Performing post-installation setup tasks',
-                             'Configuring installed system'], timeout=600)
+                             'Configuring installed system'], timeout=1500)
         rawc.expect('reboot: Restarting system', timeout=300)
         self.system.set_state(OpSystemState.IPLing)
         self.system.goto_state(OpSystemState.PETITBOOT_SHELL)
-        OpTestInstallUtil.stop_server()
-        OpTestInstallUtil.set_bootable_disk(self.host.get_scratch_disk())
+        OpIU.stop_server()
+        OpIU.set_bootable_disk(self.host.get_scratch_disk())
+        self.system.goto_state(OpSystemState.OFF)
         self.system.goto_state(OpSystemState.OS)
         con = self.system.sys_get_ipmi_console()
         self.system.host_console_login()
         self.system.host_console_unique_prompt()
         con.run_command("uname -a")
         con.run_command("cat /etc/os-release")
+        self.host.host_gather_opal_msg_log()
+        self.host.host_gather_kernel_log()
         # Run additional host commands if any from user
         if self.conf.args.host_cmd:
             con.run_command(self.conf.args.host_cmd)
