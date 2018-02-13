@@ -20,7 +20,6 @@
 
 
 import unittest
-import subprocess
 
 import OpTestConfiguration
 from common.OpTestUtil import OpTestUtil
@@ -39,8 +38,8 @@ class InstallHostOS(unittest.TestCase):
         self.bmc_type = self.conf.args.bmc_type
         if not (self.conf.args.os_repo or self.conf.args.os_cdrom):
             self.fail("Provide installation media for installation, --os-repo is missing")
-        if not (self.conf.args.host_gateway and self.conf.args.host_dns and self.conf.args.host_submask):
-            self.fail("Provide host network details refer, --host-{gateway,dns,submask}")
+        if not (self.conf.args.host_gateway and self.conf.args.host_dns and self.conf.args.host_submask and self.conf.args.host_mac):
+            self.fail("Provide host network details refer, --host-{gateway,dns,submask,mac}")
         if not self.conf.args.host_scratch_disk:
             self.fail("Provide proper host disk to install refer, --host-scratch-disk")
 
@@ -78,16 +77,8 @@ class InstallHostOS(unittest.TestCase):
         port = OpIU.start_server(my_ip)
 
         if "qemu" not in self.bmc_type:
-            if not self.conf.args.host_mac:
-                # we need to go and grab things from the network to netboot
-                arp = subprocess.check_output(['arp', self.host.hostname()]).split('\n')[1]
-                arp = arp.split()
-                host_mac_addr = arp[2]
-                print "# Found host mac addr %s", host_mac_addr
-            else:
-                host_mac_addr = self.conf.args.host_mac
             ks_url = 'http://%s:%s/%s' % (my_ip, port, ks)
-            kernel_args = "ifname=net0:%s ip=%s::%s:%s:%s:net0:none nameserver=%s inst.ks=%s" % (host_mac_addr,
+            kernel_args = "ifname=net0:%s ip=%s::%s:%s:%s:net0:none nameserver=%s inst.ks=%s" % (self.conf.args.host_mac,
                                                                                                  self.host.ip,
                                                                                                  self.conf.args.host_gateway,
                                                                                                  self.conf.args.host_submask,

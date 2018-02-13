@@ -1295,8 +1295,20 @@ class OpTestSystem(object):
             my_ip = rawc.before
             rawc.expect('\n')
         except Exception:  # Looks like older nc does not support -v, lets fallback
-            my_ip = commands.getoutput("hostname -i")
-            rawc.sendcontrol('c')  # to avoid incase nc command hangs around
+            rawc.sendcontrol('c')  # to avoid incase nc command hangs
+            my_ip = None
+            ip = commands.getoutput("hostname -i")
+            ip_lst = commands.getoutput("hostname -I").split(" ")
+            # Let's validate the IP
+            for item in ip_lst:
+                if item == ip:
+                    my_ip = ip
+                    break
+            if not my_ip:
+                if len(ip_lst) == 1:
+                    my_ip = ip_lst[0]
+                else:
+                    print "hostname -i does not provide valid IP, correct and proceed with installation"
         return my_ip
 
 class OpTestFSPSystem(OpTestSystem):

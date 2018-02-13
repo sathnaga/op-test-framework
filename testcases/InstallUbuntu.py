@@ -23,7 +23,6 @@
 import unittest
 import time
 import pexpect
-import subprocess
 
 import OpTestConfiguration
 from common.OpTestUtil import OpTestUtil
@@ -58,6 +57,12 @@ class InstallUbuntu(unittest.TestCase):
         self.bmc = conf.bmc()
         self.util = OpTestUtil()
         self.bmc_type = conf.args.bmc_type
+        if not (self.conf.args.os_repo or self.conf.args.os_cdrom):
+            self.fail("Provide installation media for installation, --os-repo is missing")
+        if not (self.conf.args.host_gateway and self.conf.args.host_dns and self.conf.args.host_submask and self.conf.args.host_mac):
+            self.fail("Provide host network details refer, --host-{gateway,dns,submask,mac}")
+        if not self.conf.args.host_scratch_disk:
+            self.fail("Provide proper host disk to install refer, --host-scratch-disk")
 
     def select_petitboot_item(self, item):
         self.system.goto_state(OpSystemState.PETITBOOT)
@@ -146,14 +151,8 @@ class InstallUbuntu(unittest.TestCase):
             rawc.sendline('')
             rawc.sendline('')
         else:
-            if not self.conf.args.host_mac:
-                arp = subprocess.check_output(['arp', self.host.hostname()]).split('\n')[1]
-                arp = arp.split()
-                host_mac_addr = arp[2]
-                print "# Found host mac addr %s", host_mac_addr
-            else:
-                host_mac_addr = self.conf.args.host_mac
-            kernel_args = kernel_args + ' netcfg/choose_interface=%s BOOTIF=01-%s' % (host_mac_addr, '-'.join(host_mac_addr.split(':')))
+            kernel_args = kernel_args + ' netcfg/choose_interface=%s BOOTIF=01-%s' % (self.conf.args.host_mac,
+                                                                                      '-'.join(self.conf.args.host_mac.split(':')))
 
             cmd = "[ -f %s ]&& rm -f %s;[ -f %s ] && rm -f %s;true" % (vmlinux,
                                                                        vmlinux,

@@ -28,7 +28,6 @@ import BaseHTTPServer
 import SimpleHTTPServer
 import commands
 import time
-import subprocess
 from Exceptions import CommandFailed
 import OpTestConfiguration
 
@@ -92,15 +91,11 @@ class InstallUtil():
         """
         Assign host ip in petitboot
         """
-        if not self.conf.args.host_mac:
-            arp = subprocess.check_output(['arp', self.host.hostname()]).split('\n')[1]
-            arp = arp.split()
-            host_mac_addr = arp[2]
-        else:
-            host_mac_addr = self.conf.args.host_mac
         self.console.run_command("stty cols 300")
         self.console.run_command("stty rows 30")
-        cmd = "ip addr|grep -B1 -i %s|grep BROADCAST|awk -F':' '{print $2}'" % host_mac_addr
+        # Lets reduce timeout in petitboot
+        self.console.run_command("nvram --update-config petitboot,timeout=10")
+        cmd = "ip addr|grep -B1 -i %s|grep BROADCAST|awk -F':' '{print $2}'" % self.conf.args.host_mac
         iface = self.console.run_command(cmd)[0].strip()
         cmd = "ifconfig %s %s netmask %s" % (iface, self.host.ip, self.conf.args.host_submask)
         self.console.run_command(cmd)
@@ -235,6 +230,8 @@ class InstallUtil():
         """
         self.system.sys_set_bootdev_no_override()
         self.system.host_console_unique_prompt()
+        self.console.run_command("stty cols 300")
+        self.console.run_command("stty rows 30")
         # FIXME: wait till the device(disk) discovery in petitboot
         time.sleep(60)
         cmd = 'blkid %s-*' % disk
