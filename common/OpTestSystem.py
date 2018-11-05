@@ -34,7 +34,7 @@ import time
 import subprocess
 import pexpect
 import socket
-import errno
+import commands
 import unittest
 
 import OpTestIPMI # circular dependencies, use package
@@ -165,7 +165,7 @@ class OpTestSystem(object):
         self.ipl_timeout = 4 # needs consideration with petitboot timeout
         self.booting_watermark = 100
         self.booting_timeout = 5
-        self.kill_cord = 102 # just a ceiling on giving up
+        self.kill_cord = 150 # just a ceiling on giving up
 
         # We have a state machine for going in between states of the system
         # initially, everything in UNKNOWN, so we reset things.
@@ -318,9 +318,6 @@ class OpTestSystem(object):
     def disable_stty_echo(self):
         return False
 
-    def cronus_capable(self):
-        return False
-
     def host(self):
         return self.cv_HOST
 
@@ -364,7 +361,6 @@ class OpTestSystem(object):
             self.state = self.stateHandlers[self.state](state)
             # transition from states invalidate the previous PS1 setting, so clear it
             if self.previous_state != self.state:
-              self.util.clear_system_state(self)
               self.util.clear_state(self)
               self.previous_state = self.state
             log.debug("OpTestSystem TRANSITIONED TO: %s" % (self.state))
@@ -394,8 +390,7 @@ class OpTestSystem(object):
         self.console.enable_setup_term_quiet()
         sys_pty = self.console.get_console()
         self.console.disable_setup_term_quiet()
-        sys_pty.sendcontrol('c')
-
+        sys_pty.sendline()
         r = sys_pty.expect(["x=exit", "Petitboot", ".*#", ".*\$", "login:", pexpect.TIMEOUT, pexpect.EOF], timeout=5)
         if r in [0,1]:
           if (target_state == OpSystemState.PETITBOOT):
@@ -465,7 +460,7 @@ class OpTestSystem(object):
         rc = sys_pty.expect(["x=exit", "Petitboot", ".*#", ".*\$", "login:", pexpect.TIMEOUT, pexpect.EOF], timeout=5)
         if rc in [0,1,5,6]:
           return OpSystemState.UNKNOWN # we really should not have arrived in here and not much we can do
-        sys_pty.sendline("cat /proc/version | grep {}; echo $?".format(self.openpower))
+        sys_pty.sendline("cat /proc/version | cut -d ' ' -f 3 | grep %s; echo $?" % (self.openpower))
         time.sleep(0.2)
         rc = sys_pty.expect([self.expect_prompt, pexpect.TIMEOUT, pexpect.EOF], timeout=1)
         if rc == 0:
@@ -537,12 +532,11 @@ class OpTestSystem(object):
               x += 1
               log.debug("\n *** WaitForIt CURRENT STATE \"{:02}\" TARGET STATE \"{:02}\"\n"
                       " *** WaitForIt working on transition\n"
-                      " *** Expect Buffer ID={}\n"
                       " *** Current loop iteration \"{:02}\"             - Reconnect attempts \"{:02}\" - loop_max \"{:02}\"\n"
                       " *** WaitForIt timeout interval \"{:02}\" seconds - Stale buffer check every \"{:02}\" times\n"
                       " *** WaitForIt variables \"{}\"\n"
                       " *** WaitForIt Refresh=\"{}\" Buffer Kicker=\"{}\" - Kill Cord=\"{:02}\"\n".format(self.state, self.target_state,
-                      hex(id(sys_pty)), x, reconnect_count, kwargs['loop_max'], kwargs['timeout'], kwargs['threshold'],
+                      x, reconnect_count, kwargs['loop_max'], kwargs['timeout'], kwargs['threshold'],
                       sorted(kwargs['expect_dict'].keys()), kwargs['refresh'], kwargs['buffer_kicker'], self.kill_cord))
             if (x >= kwargs['loop_max']):
               if kwargs['last_try']:
@@ -601,7 +595,6 @@ class OpTestSystem(object):
           self.sys_set_bootdev_setup()
         else:
           self.sys_set_bootdev_no_override()
-        self.util.clear_system_state(self)
         self.util.clear_state(self)
         self.block_setup_term = 1 # block during reboot
         sys_pty.sendline('reboot') # connect will have the login/root setup_term done
@@ -693,7 +686,6 @@ class OpTestSystem(object):
         self.block_setup_term = 1
         if state == OpSystemState.PETITBOOT:
             # verify that we are at the petitboot menu
-            self.petitboot_exit_to_shell()
             self.exit_petitboot_shell()
             return OpSystemState.PETITBOOT
         if state == OpSystemState.PETITBOOT_SHELL:
@@ -713,7 +705,7 @@ class OpTestSystem(object):
         self.block_setup_term = 1
         if state == OpSystemState.PETITBOOT_SHELL:
             # verify that we are at the petitboot shell
-            self.get_petitboot_prompt()
+            self.petitboot_exit_to_shell()
             return OpSystemState.PETITBOOT_SHELL
 
         if state == OpSystemState.PETITBOOT:
@@ -772,7 +764,6 @@ class OpTestSystem(object):
             raise OpTestError(l_msg)
         log.info(msg)
         self.cv_HOST.ssh.state = SSHConnectionState.DISCONNECTED
-        self.util.clear_system_state(self)
         self.util.clear_state(self)
         return OpSystemState.OFF
 
@@ -1099,8 +1090,6 @@ class OpTestSystem(object):
 
     def petitboot_exit_to_shell(self):
         sys_pty = self.console.get_console()
-        log.debug("USING PES Expect Buffer ID={}".format(hex(id(sys_pty))))
-        sys_pty.sendcontrol('c')
         for i in range(3):
           pp = self.get_petitboot_prompt()
           if pp == 1:
@@ -1113,7 +1102,6 @@ class OpTestSystem(object):
     def get_petitboot_prompt(self):
         my_pp = 0
         sys_pty = self.console.get_console()
-        log.debug("USING GPP Expect Buffer ID={}".format(hex(id(sys_pty))))
         sys_pty.sendline()
         pes_rc = sys_pty.expect([".*#", ".*# $", pexpect.TIMEOUT, pexpect.EOF], timeout=10)
         if pes_rc in [0,1]:
@@ -1128,37 +1116,25 @@ class OpTestSystem(object):
 
     def exit_petitboot_shell(self):
         sys_pty = self.console.get_console()
-        log.debug("USING EPS 1 Expect Buffer ID={}".format(hex(id(sys_pty))))
         eps_rc = self.try_exit(sys_pty)
         if eps_rc == 0: # Petitboot
           return
         else: # we timed out or eof
-          try:
-              self.util.try_recover(self.console, counter=3)
-              # if we get back here we're good and at the prompt
-              # but we lost our sys_pty, so get a new one
-              sys_pty = self.console.get_console()
-              log.debug("USING EPS 2 Expect Buffer ID={}".format(hex(id(sys_pty))))
-              sys_pty.sendline()
-              eps_rc = self.try_exit(sys_pty)
-              if eps_rc == 0: # Petitboot
-                return
-              else:
-                raise RecoverFailed(before=sys_pty.before, after=sys_pty.after,
-                        msg="Unable to get the Petitboot prompt stage 3, we were trying to exit back to menu")
-          except Exception as e:
-              # who knows but keep on
-              log.debug("EPS Exception={}".format(e))
+          self.util.try_recover(self.console, counter=3)
+          # if we get back here we're good and at the prompt
+          sys_pty.sendline()
+          eps_rc = self.try_exit(sys_pty)
+          if eps_rc == 0: # Petitboot
+            return
+          else:
+            raise RecoverFailed(before=sys_pty.before, after=sys_pty.after,
+                    msg="Unable to get the Petitboot prompt stage 3, we were trying to exit back to menu")
 
     def try_exit(self, sys_pty):
           self.util.clear_state(self)
-          log.debug("USING TE Expect Buffer ID={}".format(hex(id(sys_pty))))
           sys_pty.sendline()
           sys_pty.sendline("exit")
           rc_return = sys_pty.expect(["Petitboot", pexpect.TIMEOUT, pexpect.EOF], timeout=10)
-          log.debug("rc_return={}".format(rc_return))
-          log.debug("sys_pty.before={}".format(sys_pty.before))
-          log.debug("sys_pty.after={}".format(sys_pty.after))
           if rc_return == 0:
             return rc_return
           else:
@@ -1166,14 +1142,6 @@ class OpTestSystem(object):
 
     def get_my_ip_from_host_perspective(self):
         raw_pty = self.console.get_console()
-        # run any command to get the prompt setup
-        hostname_output = self.console.run_command("hostname -i")
-        log.debug("hostname_output={}".format(hostname_output))
-        if len(hostname_output) >= 1:
-            my_ip = hostname_output[0]
-        else:
-            my_ip = None
-        log.debug("hostname_output to my_ip={}".format(my_ip))
         port = 12340
         my_ip = None
         try:
@@ -1183,55 +1151,32 @@ class OpTestSystem(object):
                 raw_pty.send("nc -l -p %u -v\n" % port)
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             time.sleep(0.5)
-            log.debug("If UNABLE to ping, check DNS or multihome, hostname={} port={}"
-                .format(self.host().hostname(), port))
             log.debug("# Connecting to %s:%u" % (self.host().hostname(), port))
-            sock.settimeout(30)
-            try:
-                sock.connect((self.host().hostname(), port))
-            except socket.error as e:
-                log.debug("socket.error Exception={}".format(e))
-                if e.errno == errno.ECONNRESET or e.errno == errno.EPIPE:
-                    log.debug("socket.error Exception expected={}".format(e))
-                    pass
-                else:
-                    log.debug("socket.error raise  Exception={}".format(e))
-                    raise e
-            try:
-                sock.send('Hello World!')
-                log.debug("sock send Hello World")
-                sock.close()
-                log.debug("sock close")
-            except socket.error as e:
-                log.debug("socket.error send close Exception={}".format(e))
-                if e.errno == errno.ECONNRESET or e.errno == errno.EPIPE:
-                    log.debug("socket.error Exception send close expected={}".format(e))
-                    pass
-                else:
-                    log.debug("socket.error raise send close Exception={}".format(e))
-                    raise e
-            rc = raw_pty.expect(['Connection from ', pexpect.TIMEOUT, pexpect.EOF])
-            log.debug("Connection from rc={}".format(rc))
-            rc = raw_pty.expect([':', ' ', pexpect.TIMEOUT, pexpect.EOF])
-            log.debug("Colon rc={}".format(rc))
+            sock.connect((self.host().hostname(), port))
+            sock.send('Hello World!')
+            sock.close()
+            raw_pty.expect('Connection from ')
+            raw_pty.expect([':', ' '])
             my_ip = raw_pty.before
-            log.debug("raw_pty before={} raw_pty after={}".format(raw_pty.before, raw_pty.after))
             raw_pty.expect('\n')
             raw_pty.expect('#')
-            log.debug("Connection from: my_ip={}, this is the op-test box".format(my_ip))
-            if my_ip is not None:
-                # need to investigate multihomed boxes more
-                just_ip = socket.gethostbyname(my_ip)
-                log.debug("just_ip={}".format(just_ip))
+            log.debug(repr(my_ip))
             return my_ip
         except Exception as e:  # Looks like older nc does not support -v, lets fallback
-            log.debug("Processing in Exception path, e={}".format(e))
             raw_pty.sendcontrol('c')  # to avoid incase nc command hangs
-            time.sleep(2) # give it time to recover
-            log.debug("Exception path sleeping 2 seconds to recover")
-            # Petitboot does not support hostname -I
-            log.warning("Using my_ip={} from Exception path handling, this may not work".format(my_ip))
-
+            my_ip = None
+            ip = commands.getoutput("hostname -i")
+            ip_lst = commands.getoutput("hostname -I").split(" ")
+            # Let's validate the IP
+            for item in ip_lst:
+                if item == ip:
+                    my_ip = ip
+                    break
+            if not my_ip:
+                if len(ip_lst) == 1:
+                    my_ip = ip_lst[0]
+                else:
+                    log.error("hostname -i does not provide valid IP, correct and proceed with installation")
         return my_ip
 
     def sys_enable_tpm(self):
@@ -1374,9 +1319,6 @@ class OpTestOpenBMCSystem(OpTestSystem):
     def sys_is_tpm_enabled(self):
         return self.rest.is_tpm_enabled()
 
-    def cronus_capable(self):
-        return True
-
 class OpTestQemuSystem(OpTestSystem):
     '''
     Implementation of OpTestSystem for the Qemu Simulator
@@ -1417,7 +1359,7 @@ class OpTestQemuSystem(OpTestSystem):
         return False
 
     def has_mtd_pnor_access(self):
-        return True
+        return False
 
 class OpTestMamboSystem(OpTestSystem):
     '''
