@@ -102,6 +102,7 @@ from testcases import OpTestSensors
 from testcases import OpTestSwitchEndianSyscall
 from testcases import OpTestHostboot
 from testcases import OpTestExample
+from common.OpTestProfiler import Profilers
 import OpTestConfiguration
 import sys
 import time
@@ -934,6 +935,10 @@ try:
             OpTestConfiguration.conf.util.cleanup()
             sys.exit(exit_code)
 
+    # create profiler instances
+    if OpTestConfiguration.conf.args.enable_profiler:
+        profiler = Profilers(profiler_cmd_path=OpTestConfiguration.conf.args.profiler_file)
+        profiler.run()
     if not res or (res and not (res.errors or res.failures)):
         res = run_tests(t, failfast=OpTestConfiguration.conf.args.failfast)
     else:
@@ -968,6 +973,9 @@ except Exception as e:
     exit_code = -1
     sys.exit(exit_code)
 finally:
+    # stop profile instances
+    if OpTestConfiguration.conf.args.enable_profiler:
+        profiler.stop()
     # Create a softlink to `latest` test results
     output = OpTestConfiguration.conf.logdir
     if not os.path.exists(output):
